@@ -1,0 +1,38 @@
+# .gitignore for ASP.NET Core / Visual Studio
+
+# Build outputs
+bin/
+obj/
+
+# Visual Studio files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+
+# Rider
+.idea/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+
+# NuGet
+*.nupkg
+.nuget/
+
+# ASP.NET temp files
+appsettings.*.json
+secrets.json
+
+# Visual Studio Code
+.vscode/
+
+# Runtime
+*.RuntimeConfig.dev.json
+
+secrets.txt
