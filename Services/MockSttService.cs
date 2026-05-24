@@ -19,12 +19,13 @@ public class MockSttService : ISttService
         {
             var s = Encoding.UTF8.GetString(audioChunk);
             if (string.IsNullOrWhiteSpace(s)) return Task.FromResult(string.Empty);
-            _log.LogInformation("[MockStt] Transcribed: {text}", s);
+            _log.LogInformation("[MockStt] Transcribed for {sessionId}: {text}", sessionId, s);
             return Task.FromResult(s);
         }
-        catch
+        catch (Exception ex)
         {
-            return Task.FromResult(string.Empty);
+            _log.LogError(ex, "Mock STT failed to transcribe for {sessionId}", sessionId);
+            throw;
         }
     }
 }

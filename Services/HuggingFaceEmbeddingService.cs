@@ -12,12 +12,6 @@ public class HuggingFaceEmbeddingService : IEmbeddingService
     private readonly AppSettings _settings;
     private readonly ILogger<HuggingFaceEmbeddingService> _log;
 
-    public HuggingFaceEmbeddingService(IHttpClientFactory httpFactory, IOptions<AppSettings> opts)
-    {
-        _httpFactory = httpFactory;
-        _settings = opts.Value;
-    }
-
     public HuggingFaceEmbeddingService(IHttpClientFactory httpFactory, IOptions<AppSettings> opts, ILogger<HuggingFaceEmbeddingService> log)
     {
         _httpFactory = httpFactory;

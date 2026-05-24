@@ -30,10 +30,15 @@ public class KnowledgeController : ControllerBase
             _log.LogInformation("Upload complete: Title={Title}", title);
             return Ok(new { status = "uploaded" });
         }
+        catch (ArgumentException aex)
+        {
+            _log.LogWarning(aex, "Invalid upload request for Title={Title}", dto?.Title);
+            return BadRequest(new { error = "Invalid document data provided." });
+        }
         catch (Exception ex)
         {
-            _log.LogError(ex, "Failed to upload knowledge doc: Title={Title}", dto.Title);
-            return Problem("Failed to upload knowledge");
+            _log.LogError(ex, "Failed to upload knowledge doc: Title={Title}", dto?.Title);
+            return Problem(title: "Upload failed", detail: "An error occurred while uploading the knowledge document. Please try again later.", statusCode: 500);
         }
     }
 
@@ -48,10 +53,15 @@ public class KnowledgeController : ControllerBase
             _log.LogInformation("Knowledge search returned {Count} results for q={Query}", results?.Count ?? 0, q);
             return Ok(new { query = q, results });
         }
+        catch (ArgumentException aex)
+        {
+            _log.LogWarning(aex, "Invalid search request: q={Query}", q);
+            return BadRequest(new { error = "Invalid search query." });
+        }
         catch (Exception ex)
         {
             _log.LogError(ex, "Knowledge search failed for q={Query}", q);
-            return Problem("Failed to perform knowledge search");
+            return Problem(title: "Search failed", detail: "An error occurred while searching knowledge. Please try again later.", statusCode: 500);
         }
     }
 }

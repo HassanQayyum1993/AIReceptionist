@@ -75,7 +75,11 @@ public class StreamWebSocketHandler : IStreamWebSocketHandler
                 _log.LogWarning(ex, "Failed to parse WS message");
             }
         }
-        try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "closing", CancellationToken.None); } catch { }
+        try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "closing", CancellationToken.None); }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Error while closing websocket");
+        }
     }
 
     public async Task SendAudioToCallerAsync(string callSid, byte[] audio)

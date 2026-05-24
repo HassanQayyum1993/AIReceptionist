@@ -53,8 +53,9 @@ public class RagService : IRagService
         }
         catch (Exception ex)
         {
+            // Log and rethrow so callers (controllers) can return proper error responses
             _log.LogError(ex, "Failed to retrieve RAG results for query: {Query}", query);
-            return new List<string>();
+            throw;
         }
     }
     

@@ -3,6 +3,7 @@ using System.Text;
 using Newtonsoft.Json.Linq;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Hosting;
 
 namespace AIReceptionist.Api.Services;
 
@@ -11,12 +12,14 @@ public class GroqEmbeddingService : IEmbeddingService
     private readonly IHttpClientFactory _httpFactory;
     private readonly AppSettings _settings;
     private readonly ILogger<GroqEmbeddingService> _log;
+    private readonly IHostEnvironment _env;
 
-    public GroqEmbeddingService(IHttpClientFactory httpFactory, IOptions<AppSettings> opts, ILogger<GroqEmbeddingService> log)
+    public GroqEmbeddingService(IHttpClientFactory httpFactory, IOptions<AppSettings> opts, ILogger<GroqEmbeddingService> log, IHostEnvironment env)
     {
         _httpFactory = httpFactory;
         _settings = opts.Value;
         _log = log;
+        _env = env;
     }
 
     public async Task<float[]> CreateEmbeddingAsync(string text, CancellationToken ct = default)
@@ -32,15 +35,38 @@ public class GroqEmbeddingService : IEmbeddingService
 
         _log.LogDebug("Groq embedding request: url={Url}, model={Model}, textLength={Len}", url, model, text?.Length ?? 0);
 
+        // Prefer using the configured HttpClient BaseAddress when available to avoid accidental double-paths
+        HttpResponseMessage res;
+        string txt;
         try
         {
-            var res = await client.PostAsync(url, new StringContent(json, Encoding.UTF8, "application/json"), ct);
-            var txt = await res.Content.ReadAsStringAsync(ct);
+            if (client.BaseAddress != null)
+            {
+                // Build request Uri from BaseAddress to ensure path segments are combined correctly
+                var requestUri = new Uri(client.BaseAddress, "embeddings");
+                res = await client.PostAsync(requestUri, new StringContent(json, Encoding.UTF8, "application/json"), ct);
+            }
+            else
+            {
+                // Fall back to absolute URL constructed from settings
+                // Validate URL to avoid HttpClient invalid URI errors
+                if (!Uri.TryCreate(url, UriKind.Absolute, out var _))
+                {
+                    _log.LogError("Invalid Groq embedding request URL: {Url}. Check configuration (Groq:BaseUrl or OpenAI:BaseUrl).", url);
+                    throw new InvalidOperationException("Invalid Groq base URL configuration");
+                }
+                res = await client.PostAsync(url, new StringContent(json, Encoding.UTF8, "application/json"), ct);
+            }
+            txt = await res.Content.ReadAsStringAsync(ct);
             if (!res.IsSuccessStatusCode)
             {
                 var snippet = txt?.Length > 1000 ? txt.Substring(0, 1000) : txt;
-                _log.LogWarning("Groq embeddings request failed: {Status} {Reason}. Response snippet: {Snippet}", (int)res.StatusCode, res.ReasonPhrase, snippet);
-                return Array.Empty<float>();
+                _log.LogError("Groq embeddings request failed: {Status} {Reason}. Response snippet: {Snippet}", (int)res.StatusCode, res.ReasonPhrase, snippet);
+                if (_env?.IsDevelopment() == true)
+                {
+                    _log.LogDebug("Full Groq response: {Response}", txt);
+                }
+                throw new HttpRequestException($"Groq embeddings request failed: {(int)res.StatusCode} {res.ReasonPhrase}. Response snippet: {snippet}");
             }
 
             try
@@ -59,13 +85,13 @@ public class GroqEmbeddingService : IEmbeddingService
             catch (Exception ex)
             {
                 _log.LogError(ex, "Failed to parse Groq embeddings response: {Response}", txt);
-                return Array.Empty<float>();
+                throw new InvalidOperationException("Failed to parse Groq embeddings response", ex);
             }
         }
         catch (Exception ex)
         {
-            _log.LogError(ex, "Groq embeddings request exception");
-            return Array.Empty<float>();
+            _log.LogError(ex, "Groq embeddings request exception for url {Url}", url);
+            throw;
         }
     }
 }

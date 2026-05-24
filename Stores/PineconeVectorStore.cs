@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using Newtonsoft.Json.Linq;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 
 namespace AIReceptionist.Api.Stores;
 
@@ -9,11 +10,13 @@ public class PineconeVectorStore : IVectorStore
 {
     private readonly IHttpClientFactory _httpFactory;
     private readonly PineconeSettings _settings;
+    private readonly ILogger<PineconeVectorStore> _log;
 
-    public PineconeVectorStore(IHttpClientFactory httpFactory, IOptions<AppSettings> opts)
+    public PineconeVectorStore(IHttpClientFactory httpFactory, IOptions<AppSettings> opts, ILogger<PineconeVectorStore> log)
     {
         _httpFactory = httpFactory;
         _settings = opts.Value.Pinecone ?? new PineconeSettings();
+        _log = log;
     }
 
     private string BaseUrl => BuildBaseUrl();
@@ -49,8 +52,16 @@ public class PineconeVectorStore : IVectorStore
         };
         var json = Newtonsoft.Json.JsonConvert.SerializeObject(body);
         var req = CreateRequest(HttpMethod.Post, "/vectors/upsert", new StringContent(json, Encoding.UTF8, "application/json"));
-        var res = await client.SendAsync(req);
-        res.EnsureSuccessStatusCode();
+        try
+        {
+            var res = await client.SendAsync(req);
+            res.EnsureSuccessStatusCode();
+        }
+        catch (Exception ex)
+        {
+            _log?.LogError(ex, "Failed to upsert vector to Pinecone for id {Id}", id);
+            throw;
+        }
     }
 
     public async Task<List<string>> QueryAsync(float[] queryEmb, int topK = 3)
@@ -69,15 +80,16 @@ public class PineconeVectorStore : IVectorStore
         var txt = await res.Content.ReadAsStringAsync();
         try
         {
-            Console.WriteLine("Pinecone query response: " + txt);
+            _log?.LogDebug("Pinecone query response: {Response}", txt);
             var j = JObject.Parse(txt);
             var matches = j["matches"] as JArray;
             if (matches == null) return new List<string>();
             return matches.Select(m => m["metadata"]?["text"]?.Value<string>() ?? string.Empty).Where(s => !string.IsNullOrEmpty(s)).ToList();
         }
-        catch
+        catch (Exception ex)
         {
-            return new List<string>();
+            _log?.LogError(ex, "Failed to parse Pinecone response");
+            throw;
         }
     }
 }

@@ -42,8 +42,8 @@ public class OpenAiService : IAiService
 
         if (!res.IsSuccessStatusCode)
         {
-            _log.LogWarning("Generation failed: {Status} {Reason}. Response: {Response}", (int)res.StatusCode, res.ReasonPhrase, txt);
-            return txt;
+            _log.LogError("Generation failed: {Status} {Reason}. Response: {Response}", (int)res.StatusCode, res.ReasonPhrase, txt);
+            throw new HttpRequestException($"Generation request failed: {(int)res.StatusCode} {res.ReasonPhrase}. Response: {txt}");
         }
 
         try
@@ -54,7 +54,7 @@ public class OpenAiService : IAiService
         catch (Exception ex)
         {
             _log.LogError(ex, "Failed to parse generation response. Raw: {Response}", txt);
-            return txt;
+            throw new InvalidOperationException("Failed to parse generation response", ex);
         }
     }
 }

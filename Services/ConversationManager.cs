@@ -1,5 +1,6 @@
 using AIReceptionist.Api.Domain;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AIReceptionist.Api.Services;
 
@@ -26,30 +27,92 @@ public class ConversationManager : IConversationManager
 
     public async Task HandleUtteranceAsync(string callSid, string utterance)
     {
+        if (string.IsNullOrWhiteSpace(callSid)) throw new ArgumentException("callSid is required", nameof(callSid));
+
         var state = _store.GetOrCreate(callSid);
+
+        if (string.IsNullOrWhiteSpace(utterance))
+        {
+            _log.LogWarning("Empty utterance received for call {callSid}", callSid);
+            return;
+        }
+
+        // Add user message immediately so conversation state reflects what was received
         state.Messages.Add(new ChatMessage { Role = "user", Text = utterance });
 
-        var retrieved = await _rag.RetrieveAsync(utterance, 3);
+        try
+        {
+            var retrieved = await _rag.RetrieveAsync(utterance ?? string.Empty, 3) ?? new System.Collections.Generic.List<string>();
 
-        var promptBuilder = new System.Text.StringBuilder();
-        promptBuilder.AppendLine(SystemPrompt);
-        promptBuilder.AppendLine("\n-- Retrieved Knowledge --\n");
-        foreach (var r in retrieved) promptBuilder.AppendLine(r + "\n");
-        promptBuilder.AppendLine("\n-- Conversation --\n");
-        foreach (var m in state.Messages.TakeLast(10)) promptBuilder.AppendLine($"{m.Role}: {m.Text}");
-        promptBuilder.AppendLine("\nAI:");
+            var promptBuilder = new System.Text.StringBuilder();
+            promptBuilder.AppendLine(SystemPrompt);
+            promptBuilder.AppendLine("\n-- Retrieved Knowledge --\n");
+            foreach (var r in retrieved) promptBuilder.AppendLine(r + "\n");
+            promptBuilder.AppendLine("\n-- Conversation --\n");
+            foreach (var m in state.Messages.TakeLast(10)) promptBuilder.AppendLine($"{m.Role}: {m.Text}");
+            promptBuilder.AppendLine("\nAI:");
 
-        var prompt = promptBuilder.ToString();
-        _log.LogInformation("Built prompt: {p}", prompt);
+            var prompt = promptBuilder.ToString();
+            _log.LogDebug("Built prompt for call {callSid}: {prompt}", callSid, prompt);
 
-        var response = await _ai.GenerateAsync(prompt);
-        state.Messages.Add(new ChatMessage { Role = "assistant", Text = response });
+            var response = await _ai.GenerateAsync(prompt);
+            if (string.IsNullOrWhiteSpace(response))
+            {
+                _log.LogWarning("AI returned empty response for call {callSid}", callSid);
+                response = "I'm sorry, I don't have an answer to that right now. I will follow up shortly.";
+            }
 
-        // Synthesize
-        var audio = await _tts.SynthesizeAsync(response, "alloy");
+            state.Messages.Add(new ChatMessage { Role = "assistant", Text = response });
 
-        // Send audio back via WebSocket handler (resolved at call time to avoid DI cycle)
-        var wsHandler = _services.GetRequiredService<IStreamWebSocketHandler>();
-        await wsHandler.SendAudioToCallerAsync(callSid, audio);
+            // Synthesize
+            byte[]? audio = null;
+            try
+            {
+                audio = await _tts.SynthesizeAsync(response, "alloy");
+            }
+            catch (Exception ttsEx)
+            {
+                _log.LogError(ttsEx, "TTS synthesis failed for call {callSid}", callSid);
+            }
+
+            // Send audio back via WebSocket handler (resolved at call time to avoid DI cycle)
+            var wsHandler = _services.GetRequiredService<IStreamWebSocketHandler>();
+            if (audio != null && audio.Length > 0)
+            {
+                await wsHandler.SendAudioToCallerAsync(callSid, audio);
+            }
+            else
+            {
+                // Fallback: attempt to synthesize a short error message and send it
+                try
+                {
+                    var fallback = "Sorry, I'm having trouble generating audio right now. I will follow up shortly.";
+                    var fallbackAudio = await _tts.SynthesizeAsync(fallback, "alloy");
+                    await wsHandler.SendAudioToCallerAsync(callSid, fallbackAudio);
+                }
+                catch (Exception fallbackEx)
+                {
+                    _log.LogError(fallbackEx, "Failed to send fallback audio for call {callSid}", callSid);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // Log the exception and try to notify the caller with a short apology audio
+            _log.LogError(ex, "Unhandled error while handling utterance for call {callSid}", callSid);
+
+            state.Messages.Add(new ChatMessage { Role = "assistant", Text = "Sorry, something went wrong while handling your request." });
+
+            try
+            {
+                var wsHandler = _services.GetRequiredService<IStreamWebSocketHandler>();
+                var errAudio = await _tts.SynthesizeAsync("Sorry, something went wrong. Please try again later.", "alloy");
+                await wsHandler.SendAudioToCallerAsync(callSid, errAudio);
+            }
+            catch (Exception notifyEx)
+            {
+                _log.LogError(notifyEx, "Failed to notify caller about error for call {callSid}", callSid);
+            }
+        }
     }
 }

@@ -44,8 +44,8 @@ public class GroqGenerationService : IAiService
 
         if (!res.IsSuccessStatusCode)
         {
-            _log.LogWarning("Groq generation failed: {Status} {Reason}. Response: {Response}", (int)res.StatusCode, res.ReasonPhrase, txt);
-            return txt;
+            _log.LogError("Groq generation failed: {Status} {Reason}. Response: {Response}", (int)res.StatusCode, res.ReasonPhrase, txt);
+            throw new HttpRequestException($"Groq generation request failed: {(int)res.StatusCode} {res.ReasonPhrase}. Response: {txt}");
         }
 
         try
@@ -56,7 +56,7 @@ public class GroqGenerationService : IAiService
         catch (Exception ex)
         {
             _log.LogError(ex, "Groq generation parse failed. Raw response: {Response}", txt);
-            return txt;
+            throw new InvalidOperationException("Failed to parse generation response", ex);
         }
     }
 }

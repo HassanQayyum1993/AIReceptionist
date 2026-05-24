@@ -39,7 +39,19 @@ public class CallController : ControllerBase
             if (!valid) return Unauthorized();
 
             // Read the streaming URL from configuration
-            var streamUrl = _settings.Streaming?.Url ?? "wss://your-server.example.com/api/call/stream";
+            var streamUrl = _settings.Streaming?.Url;
+            if (string.IsNullOrEmpty(streamUrl))
+            {
+                _log.LogWarning("Streaming URL not configured; returning placeholder TwiML. Configure Streaming:Url in appsettings or env vars.");
+                streamUrl = "wss://your-server.example.com/api/call/stream";
+            }
+
+            if (!Uri.TryCreate(streamUrl, UriKind.Absolute, out var _))
+            {
+                _log.LogError("Configured Streaming:Url is not a valid absolute URI: {Url}", streamUrl);
+                return Problem(title: "Invalid streaming URL", detail: "The configured streaming URL is invalid. Please update Streaming:Url configuration.", statusCode: 500);
+            }
+
             var twiml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
                         $"<Response><Start><Stream url=\"{System.Net.WebUtility.HtmlEncode(streamUrl)}\"/></Start></Response>";
             _log.LogDebug("Returning TwiML with stream url {Url}", streamUrl);
@@ -48,7 +60,7 @@ public class CallController : ControllerBase
         catch (Exception ex)
         {
             _log.LogError(ex, "Error handling incoming Twilio webhook");
-            return Problem("Internal server error processing webhook");
+            return Problem(title: "Webhook processing error", detail: "An error occurred while processing the incoming webhook. Please try again.", statusCode: 500);
         }
     }
 }

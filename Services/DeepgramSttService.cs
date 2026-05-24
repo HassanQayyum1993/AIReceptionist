@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 
 namespace AIReceptionist.Api.Services;
@@ -11,6 +12,7 @@ public class DeepgramSttService : ISttService, IDisposable
 {
     private readonly AppSettings _settings;
     private readonly IHttpClientFactory _httpFactory;
+    private readonly ILogger<DeepgramSttService> _log;
     private readonly ConcurrentDictionary<string, Session> _sessions = new();
 
     private class Session
@@ -21,10 +23,11 @@ public class DeepgramSttService : ISttService, IDisposable
         public TaskCompletionSource<string?> NextTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    public DeepgramSttService(IHttpClientFactory httpFactory, IOptions<AppSettings> opts)
+    public DeepgramSttService(IHttpClientFactory httpFactory, IOptions<AppSettings> opts, ILogger<DeepgramSttService> log)
     {
         _httpFactory = httpFactory;
         _settings = opts.Value;
+        _log = log;
     }
 
     public async Task<string> TranscribeAsync(byte[] audioChunk, string sessionId, CancellationToken ct = default)
@@ -39,9 +42,10 @@ public class DeepgramSttService : ISttService, IDisposable
         {
             await session.Ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct);
         }
-        catch
+        catch (Exception ex)
         {
-            return string.Empty;
+            _log?.LogError(ex, "Failed to send audio chunk to Deepgram websocket for session {sessionId}", sessionId);
+            throw;
         }
 
         // Wait briefly for a transcript to appear (final). Timeout after 1500ms.
@@ -58,7 +62,12 @@ public class DeepgramSttService : ISttService, IDisposable
                 return res ?? string.Empty;
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            _log?.LogError(ex, "Error waiting for Deepgram transcript for session {sessionId}", sessionId);
+            throw;
+        }
+        // timeout without transcript
         return string.Empty;
     }
 
@@ -97,10 +106,16 @@ public class DeepgramSttService : ISttService, IDisposable
                             }
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        _log?.LogDebug(ex, "Failed to parse Deepgram message for session {sessionId}: {Raw}", sessionId, txt);
+                    }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _log?.LogError(ex, "Deepgram receive loop terminated with error for session {sessionId}", sessionId);
+            }
         });
 
         return s;
@@ -108,6 +123,16 @@ public class DeepgramSttService : ISttService, IDisposable
 
     public void Dispose()
     {
-        foreach (var kv in _sessions) try { kv.Value.Ws?.Abort(); } catch { }
+        foreach (var kv in _sessions)
+        {
+            try
+            {
+                kv.Value.Ws?.Abort();
+            }
+            catch (Exception ex)
+            {
+                _log?.LogWarning(ex, "Failed to abort Deepgram websocket for session {sessionId}", kv.Key);
+            }
+        }
     }
 }
