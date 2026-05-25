@@ -24,7 +24,7 @@ public class ElevenLabsTtsService : ITtsService
         var apiKey = _settings.ElevenLabs?.ApiKey;
         if (!string.IsNullOrEmpty(apiKey)) client.DefaultRequestHeaders.Add("xi-api-key", apiKey);
 
-        var voiceId = string.IsNullOrEmpty(voice) ? (_settings.ElevenLabs?.Voice ?? "alloy") : voice;
+        var voiceId = string.IsNullOrEmpty(voice) ? (_settings.ElevenLabs?.Voice ?? "EOVAuWqgSZN2Oel78Psj") : voice;
         var url = $"https://api.elevenlabs.io/v1/text-to-speech/{voiceId}/stream";
         var body = new { text = text };
         var json = Newtonsoft.Json.JsonConvert.SerializeObject(body);

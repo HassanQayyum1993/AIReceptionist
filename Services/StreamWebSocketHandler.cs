@@ -23,14 +23,19 @@ public class StreamWebSocketHandler : IStreamWebSocketHandler
     public async Task HandleAsync(WebSocket ws)
     {
         var buffer = new byte[8192];
-        WebSocketReceiveResult res;
-        var sb = new StringBuilder();
         while (ws.State == WebSocketState.Open)
         {
-            sb.Clear();
-            res = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+            var sb = new StringBuilder();
+            WebSocketReceiveResult res;
+            do
+            {
+                res = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                if (res.MessageType == WebSocketMessageType.Close) break;
+                sb.Append(Encoding.UTF8.GetString(buffer, 0, res.Count));
+            } while (!res.EndOfMessage && ws.State == WebSocketState.Open);
+
             if (res.MessageType == WebSocketMessageType.Close) break;
-            sb.Append(Encoding.UTF8.GetString(buffer, 0, res.Count));
+
             var text = sb.ToString();
             try
             {

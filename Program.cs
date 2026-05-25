@@ -115,9 +115,20 @@ var dgKey = appSettings.Deepgram?.ApiKey;
 if (!string.IsNullOrEmpty(dgKey)) builder.Services.AddSingleton<ISttService, DeepgramSttService>();
 else builder.Services.AddSingleton<ISttService, MockSttService>();
 
-var elKey = appSettings.ElevenLabs?.ApiKey;
-if (!string.IsNullOrEmpty(elKey)) builder.Services.AddSingleton<ITtsService, ElevenLabsTtsService>();
-else builder.Services.AddSingleton<ITtsService, MockTtsService>();
+// Use Deepgram as TTS if configured, otherwise fallback to ElevenLabs or Mock
+var dgTtsKey = appSettings.Deepgram?.ApiKey;
+if (!string.IsNullOrEmpty(dgTtsKey))
+{
+    builder.Services.AddSingleton<ITtsService, DeepgramTtsService>();
+}
+else if (!string.IsNullOrEmpty(appSettings.ElevenLabs?.ApiKey))
+{
+    builder.Services.AddSingleton<ITtsService, ElevenLabsTtsService>();
+}
+else
+{
+    builder.Services.AddSingleton<ITtsService, MockTtsService>();
+}
 // Choose generation service based on configuration (Groq preferred, fallback to OpenAI implementation)
 if (!string.IsNullOrEmpty(appSettings.Groq?.ApiKey))
 {

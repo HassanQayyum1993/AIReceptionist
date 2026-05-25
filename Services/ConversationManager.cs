@@ -42,12 +42,9 @@ public class ConversationManager : IConversationManager
 
         try
         {
-            var retrieved = await _rag.RetrieveAsync(utterance ?? string.Empty, 3) ?? new System.Collections.Generic.List<string>();
-
+            // Skip vector DB retrieval; use only conversation history and system prompt
             var promptBuilder = new System.Text.StringBuilder();
             promptBuilder.AppendLine(SystemPrompt);
-            promptBuilder.AppendLine("\n-- Retrieved Knowledge --\n");
-            foreach (var r in retrieved) promptBuilder.AppendLine(r + "\n");
             promptBuilder.AppendLine("\n-- Conversation --\n");
             foreach (var m in state.Messages.TakeLast(10)) promptBuilder.AppendLine($"{m.Role}: {m.Text}");
             promptBuilder.AppendLine("\nAI:");
@@ -66,9 +63,10 @@ public class ConversationManager : IConversationManager
 
             // Synthesize
             byte[]? audio = null;
+            string ttsVoice = "aura-asteria-en"; // Default Deepgram voice, update as needed
             try
             {
-                audio = await _tts.SynthesizeAsync(response, "alloy");
+                audio = await _tts.SynthesizeAsync(response, ttsVoice);
             }
             catch (Exception ttsEx)
             {
@@ -87,7 +85,7 @@ public class ConversationManager : IConversationManager
                 try
                 {
                     var fallback = "Sorry, I'm having trouble generating audio right now. I will follow up shortly.";
-                    var fallbackAudio = await _tts.SynthesizeAsync(fallback, "alloy");
+                    var fallbackAudio = await _tts.SynthesizeAsync(fallback, ttsVoice);
                     await wsHandler.SendAudioToCallerAsync(callSid, fallbackAudio);
                 }
                 catch (Exception fallbackEx)
@@ -106,7 +104,7 @@ public class ConversationManager : IConversationManager
             try
             {
                 var wsHandler = _services.GetRequiredService<IStreamWebSocketHandler>();
-                var errAudio = await _tts.SynthesizeAsync("Sorry, something went wrong. Please try again later.", "alloy");
+                var errAudio = await _tts.SynthesizeAsync("Sorry, something went wrong. Please try again later.", "aura-asteria-en");
                 await wsHandler.SendAudioToCallerAsync(callSid, errAudio);
             }
             catch (Exception notifyEx)

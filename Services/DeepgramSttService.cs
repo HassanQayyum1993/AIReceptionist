@@ -13,7 +13,7 @@ public class DeepgramSttService : ISttService, IDisposable
     private readonly AppSettings _settings;
     private readonly IHttpClientFactory _httpFactory;
     private readonly ILogger<DeepgramSttService> _log;
-    private readonly ConcurrentDictionary<string, Session> _sessions = new();
+    private readonly ConcurrentDictionary<string, Task<Session>> _sessions = new();
 
     private class Session
     {
@@ -21,6 +21,7 @@ public class DeepgramSttService : ISttService, IDisposable
         public Task ReceiveLoopTask = Task.CompletedTask;
         public readonly ConcurrentQueue<string> Transcripts = new();
         public TaskCompletionSource<string?> NextTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> ReadyTcs = new(TaskCreationOptions.RunContinuationsAsynchronously); // Signals Deepgram is ready for audio
     }
 
     public DeepgramSttService(IHttpClientFactory httpFactory, IOptions<AppSettings> opts, ILogger<DeepgramSttService> log)
@@ -32,7 +33,14 @@ public class DeepgramSttService : ISttService, IDisposable
 
     public async Task<string> TranscribeAsync(byte[] audioChunk, string sessionId, CancellationToken ct = default)
     {
-        var session = _sessions.GetOrAdd(sessionId, sid => CreateSessionAsync(sid));
+        var session = await _sessions.GetOrAdd(sessionId, CreateSessionAsync);
+
+        // Wait for Deepgram to signal it's ready for audio
+        if (!await session.ReadyTcs.Task.WaitAsync(TimeSpan.FromSeconds(5), ct))
+        {
+            _log?.LogWarning("Deepgram session {sessionId} not ready for audio after timeout", sessionId);
+            return string.Empty;
+        }
 
         // Send audio as base64 in Deepgram append message
         var base64 = Convert.ToBase64String(audioChunk);
@@ -40,7 +48,17 @@ public class DeepgramSttService : ISttService, IDisposable
         var bytes = Encoding.UTF8.GetBytes(Newtonsoft.Json.JsonConvert.SerializeObject(msg));
         try
         {
-            await session.Ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct);
+            if (session.Ws.State == WebSocketState.Open)
+            {
+                // Log outgoing message to Deepgram
+                _log?.LogInformation("Sending to Deepgram for session {sessionId}: {message}", sessionId, Encoding.UTF8.GetString(bytes));
+                await session.Ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct);
+            }
+            else
+            {
+                _log?.LogWarning("WebSocket not open for session {sessionId}", sessionId);
+                // Optionally, recreate the session or throw
+            }
         }
         catch (Exception ex)
         {
@@ -71,30 +89,59 @@ public class DeepgramSttService : ISttService, IDisposable
         return string.Empty;
     }
 
-    private Session CreateSessionAsync(string sessionId)
+    private async Task<Session> CreateSessionAsync(string sessionId)
     {
         var s = new Session();
         var key = _settings.Deepgram?.ApiKey ?? string.Empty;
         var url = _settings.Deepgram?.RealtimeUrl ?? "wss://api.deepgram.com/v1/listen";
 
         s.Ws.Options.SetRequestHeader("Authorization", $"Token {key}");
-        // connect
+        try
+        {
+            await s.Ws.ConnectAsync(new Uri(url), CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _log?.LogError(ex, "Failed to connect Deepgram websocket for session {sessionId}", sessionId);
+            throw;
+        }
+
+        // Send Deepgram Configure message immediately after connecting
+        var configureMsg = new
+        {
+            type = "Configure",
+            features = new[] { "transcription" },
+            // Add any required Deepgram options here, e.g.:
+            // encoding = "linear16",
+            // sample_rate = 16000,
+            // language = "en-US"
+        };
+        var configureBytes = Encoding.UTF8.GetBytes(Newtonsoft.Json.JsonConvert.SerializeObject(configureMsg));
+        _log?.LogInformation("Sending to Deepgram for session {sessionId}: {message}", sessionId, Encoding.UTF8.GetString(configureBytes));
+        await s.Ws.SendAsync(new ArraySegment<byte>(configureBytes), WebSocketMessageType.Text, true, CancellationToken.None);
+
         s.ReceiveLoopTask = Task.Run(async () =>
         {
             try
             {
-                await s.Ws.ConnectAsync(new Uri(url), CancellationToken.None);
                 var buffer = new byte[8192];
                 while (s.Ws.State == WebSocketState.Open)
                 {
                     var res = await s.Ws.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
                     if (res.MessageType == WebSocketMessageType.Close) break;
                     var txt = Encoding.UTF8.GetString(buffer, 0, res.Count);
+                    // Log every response from Deepgram
+                    _log?.LogInformation("Deepgram WS response for session {sessionId}: {response}", sessionId, txt);
                     try
                     {
                         var j = JObject.Parse(txt);
-                        // Deepgram sends transcript messages; pick final alternatives
                         var type = j.Value<string>("type");
+                        // Deepgram signals ready for audio with a "listening" or "ready" type
+                        if (type == "listening" || type == "ready")
+                        {
+                            s.ReadyTcs.TrySetResult(true);
+                        }
+                        // Deepgram sends transcript messages; pick final alternatives
                         if (type == "transcript")
                         {
                             var isFinal = j.SelectToken("is_final")?.Value<bool?>() ?? false;
@@ -127,7 +174,7 @@ public class DeepgramSttService : ISttService, IDisposable
         {
             try
             {
-                kv.Value.Ws?.Abort();
+                kv.Value.Result.Ws?.Abort();
             }
             catch (Exception ex)
             {
